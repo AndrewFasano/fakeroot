@@ -273,6 +273,14 @@ int fakeroot_debug = 0;
 #include "wrapdef.h"
 #include "wrapstruct.h"
 
+static int (*real_open)(const char *pathname, int flags, mode_t mode) = NULL;
+static int (*real_openat)(int dfd, const char *pathname, int flags, mode_t mode) = NULL;
+
+static int (*real_open64)(const char *pathname, int flags, mode_t mode) = NULL;
+static int (*real_openat64)(int dfd, const char *pathname, int flags, mode_t mode) = NULL;
+
+static int (*real_creat)(const char *pathname, mode_t mode) = NULL;
+
 
 void load_library_symbols(void){
   /* this function loads all original functions from the C library.
@@ -656,7 +664,173 @@ static_nonapple int dont_try_chown(){
 
 
 /* The wrapped functions */
+int open(const char *pathname, int flags, ...) {
+    va_list args;
+    va_start(args, flags);
+    mode_t mode = 0;
+    INT_STRUCT_STAT st;
 
+  if (!real_open) {
+    real_open = (int (*)(const char *, int, mode_t))dlsym(RTLD_NEXT, "open");
+    if (!real_open) {
+        fprintf(stderr, "Failed to find the real open function.\n");
+        exit(EXIT_FAILURE);
+    }
+  }
+
+    if (flags & O_CREAT) {
+        mode = va_arg(args, mode_t);
+    }
+
+    va_end(args);
+
+    // A user has requested a specific mode on the file that is being
+    // created. We want to ensure that the file's created mode matches
+    // the requested mode - if it doesn't just work (i.e., umask prevents it)
+    // we'll fake the file's mode to be the requested mode
+    int rv = real_open(pathname, flags, mode);
+    if (rv != -1 && (flags & O_CREAT)) {
+        if (fstat64(rv, &st) == 0) { // Here we are getting the inode of the file
+            // We now need to update the mode field to match the requested mode
+            // IFF the file's created mode ! the requested mode, we'll tell faked to pretend the file has the requested mode
+            if ((st.st_mode & ALLPERMS) != (mode & ALLPERMS)) {
+              st.st_mode = (st.st_mode & ~ALLPERMS) | (mode & ALLPERMS);
+              INT_SEND_STAT(&st,chmod_func);
+            }
+        }
+    }
+    return rv;
+}
+
+int openat(int dirfd, const char *pathname, int flags, ...) {
+    va_list args;
+    va_start(args, flags);
+    mode_t mode = 0;
+    if (!real_openat) {
+      real_openat = (int (*)(int, const char *, int, mode_t))dlsym(RTLD_NEXT, "openat");
+      if (!real_openat) {
+          fprintf(stderr, "Failed to find the real openat function.\n");
+          exit(EXIT_FAILURE);
+      }
+    }
+
+    if (flags & O_CREAT) {
+        mode = va_arg(args, mode_t);
+    }
+
+    va_end(args);
+
+    // Call the real 'openat' function with the appropriate arguments
+    int rv = -1;
+    rv = real_openat(dirfd, pathname, flags, mode);
+
+    // Simulate file permissions if necessary
+    if (rv != -1 && (flags & O_CREAT)) {
+        struct stat64 st;
+        if (fstat64(rv, &st) == 0) {
+            // Check if the file's created mode matches the requested mode
+            if ((st.st_mode & ALLPERMS) != (mode & ALLPERMS)) {
+                //printf("openat: %s: mode: %o != expected %o. Faking \n", pathname, st.st_mode & ALLPERMS, mode & ALLPERMS);
+                // Update the file's mode to match the requested mode in faked's state
+                st.st_mode = (st.st_mode & ~ALLPERMS) | (mode & ALLPERMS);
+                INT_SEND_STAT(&st, chmod_func);
+            }
+        }
+    }
+
+    return rv;
+}
+
+
+int open64(const char *pathname, int flags, ...) {
+    va_list args;
+    va_start(args, flags);
+    mode_t mode = 0;
+    if (!real_open64) {
+      real_open64 = (int (*)(const char *, int, mode_t))dlsym(RTLD_NEXT, "open64");
+      if (!real_open64) {
+          fprintf(stderr, "Failed to find the real open64 function.\n");
+          exit(EXIT_FAILURE);
+      }
+    }
+
+    if (flags & O_CREAT) {
+        mode = va_arg(args, mode_t);
+    }
+
+    va_end(args);
+
+    int rv = real_open64(pathname, flags, mode);
+    if (rv != -1 && (flags & O_CREAT)) {
+        struct stat64 st;
+        if (fstat64(rv, &st) == 0) {
+            // Check if the file's created mode matches the requested mode
+            if ((st.st_mode & ALLPERMS) != (mode & ALLPERMS)) {
+                //printf("open64: %s: mode: %o != expected %o. Faking \n", pathname, st.st_mode & ALLPERMS, mode & ALLPERMS);
+                // Update the file's mode to match the requested mode in faked's state
+                st.st_mode = (st.st_mode & ~ALLPERMS) | (mode & ALLPERMS);
+                INT_SEND_STAT(&st, chmod_func);
+            }
+        }
+    }
+    return rv;
+}
+
+int openat64(int dirfd, const char *pathname, int flags, ...) {
+    va_list args;
+    va_start(args, flags);
+    mode_t mode = 0;
+    if (!real_openat64) {
+      real_openat64 = (int (*)(int, const char *, int, mode_t))dlsym(RTLD_NEXT, "openat64");
+      if (!real_openat64) {
+          fprintf(stderr, "Failed to find the real openat64 function.\n");
+          exit(EXIT_FAILURE);
+      }
+    }
+
+    if (flags & O_CREAT) {
+        mode = va_arg(args, mode_t);
+    }
+
+    va_end(args);
+
+    int rv = real_openat64(dirfd, pathname, flags, mode);
+    if (rv != -1 && (flags & O_CREAT)) {
+        struct stat64 st;
+        if (fstat64(rv, &st) == 0) {
+            // Check if the file's created mode matches the requested mode
+            if ((st.st_mode & ALLPERMS) != (mode & ALLPERMS)) {
+                //printf("openat64: %s: mode: %o != expected %o. Faking \n", pathname, st.st_mode & ALLPERMS, mode & ALLPERMS);
+                // Update the file's mode to match the requested mode in faked's state
+                st.st_mode = (st.st_mode & ~ALLPERMS) | (mode & ALLPERMS);
+                INT_SEND_STAT(&st, chmod_func);
+            }
+        }
+    }
+
+    return rv;
+}
+
+
+int creat(const char *pathname, mode_t mode) {
+    INT_STRUCT_STAT st;
+    if (!real_creat) {
+      real_creat = (int (*)(const char *, mode_t))dlsym(RTLD_NEXT, "creat");
+      if (!real_creat) {
+          fprintf(stderr, "Failed to find the real creat function.\n");
+          exit(EXIT_FAILURE);
+      }
+    }
+    int rv = real_creat(pathname, mode);
+    if (rv != -1) {
+        if (fstat64(rv, &st) == 0 && (st.st_mode & ALLPERMS) != (mode & ALLPERMS)) {
+            //printf("creat changing mode\n");
+            st.st_mode = (st.st_mode & ~ALLPERMS) | (mode & ALLPERMS);
+            INT_SEND_STAT(&st, chmod_func);
+        }
+    }
+    return rv;
+}
 
 int WRAP_LSTAT LSTAT_ARG(int ver,
 		       const char *file_name,
